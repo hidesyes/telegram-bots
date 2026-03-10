@@ -128,6 +128,58 @@ def rewrite_query_for_search(question: str) -> str:
         return question  # 실패 시 원본 쿼리 사용
 
 
+def extract_top_stocks(briefing_text: str, articles: list) -> str:
+    """브리핑 내용에서 자주 언급되고 맥락상 적합한 종목 Top 3 추출"""
+    # 원문 글 내용도 함께 전달해서 언급 빈도 + 맥락 분석
+    articles_text = "\n\n".join(
+        f"[{a['metadata'].get('written_date','')[:10]}] {a['metadata'].get('title','')}"
+        for a in articles
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "투자 브리핑과 원문 글 목록을 분석하여 "
+                        "여러 번 언급되고 현재 브리핑 맥락과 가장 적합한 종목 3가지를 추출하라.\n\n"
+                        "반드시 아래 JSON 형식으로만 반환:\n"
+                        '{"stocks": ['
+                        '{"name": "종목명", "ticker": "티커(없으면 빈 문자열)", '
+                        '"reason": "선정 이유 1줄", "mentions": 언급횟수(숫자)}'
+                        "]}"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"[브리핑 내용]\n{briefing_text}\n\n"
+                        f"[원문 글 목록]\n{articles_text}"
+                    )
+                }
+            ],
+            max_tokens=300,
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(response.choices[0].message.content)
+        stocks = data.get("stocks", [])[:3]
+        if not stocks:
+            return ""
+
+        lines = ["📌 주목 종목 Top 3\n"]
+        medals = ["🥇", "🥈", "🥉"]
+        for i, s in enumerate(stocks):
+            ticker = f" ({s['ticker']})" if s.get("ticker") else ""
+            lines.append(
+                f"{medals[i]} {s['name']}{ticker}\n"
+                f"   언급 {s.get('mentions', '-')}회 · {s['reason']}"
+            )
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def generate_digest(articles: list) -> str:
     """최근 수집된 글들을 자산제곱 스타일로 브리핑 생성"""
     profile = load_style_profile()

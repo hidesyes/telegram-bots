@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from config import TELEGRAM_TOKEN, ALLOWED_USER_ID
 from scraper import scrape_article, do_browser_login
 from db import add_article, search_articles, get_all_articles, get_count, delete_old_articles, delete_articles_before
-from ai import analyze_and_update_style, ask_as_jasanjejop, clear_history, rewrite_query_for_search, generate_digest
+from ai import analyze_and_update_style, ask_as_jasanjejop, clear_history, rewrite_query_for_search, generate_digest, extract_top_stocks
 from scheduler import setup_scheduler
 
 logging.basicConfig(
@@ -169,8 +169,14 @@ async def digest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("브리핑할 글이 없어요.")
             return
 
-    result = generate_digest(recent[:5])
+    target = recent[:5]
+    result = generate_digest(target)
     await update.message.reply_text(result)
+
+    # 주목 종목 Top 3 추출
+    stocks_msg = extract_top_stocks(result, target)
+    if stocks_msg:
+        await update.message.reply_text(stocks_msg)
 
 
 # ─────────────────────────────────────────────
