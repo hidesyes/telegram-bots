@@ -224,18 +224,21 @@ def delete_old_articles() -> int:
     return len(ids_to_delete)
 
 
-def get_all_articles() -> list:
-    """전체 글 목록 반환"""
-    all_docs = collection.get()
+def get_all_articles(include_content: bool = False) -> list:
+    """전체 글 목록 반환. include_content=True면 본문도 포함."""
+    all_docs = collection.get(include=["metadatas", "documents"] if include_content else ["metadatas"])
     if not all_docs["ids"]:
         return []
 
     articles = []
     for i, doc_id in enumerate(all_docs["ids"]):
-        articles.append({
+        item = {
             "id": doc_id,
             "metadata": all_docs["metadatas"][i]
-        })
+        }
+        if include_content and all_docs.get("documents"):
+            item["content"] = all_docs["documents"][i]
+        articles.append(item)
     # 작성일 최신순 정렬
     articles.sort(key=lambda x: x["metadata"].get("written_date", ""), reverse=True)
     return articles

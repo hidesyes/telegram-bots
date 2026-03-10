@@ -159,7 +159,7 @@ async def digest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 최근 7일 글만
     cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    all_articles = get_all_articles()
+    all_articles = get_all_articles(include_content=True)
     recent = [a for a in all_articles if a["metadata"].get("written_date", "") >= cutoff]
 
     if not recent:
