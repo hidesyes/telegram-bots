@@ -1,0 +1,19 @@
+# 환경변수 (API 키 등 민감한 정보)
+.env
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# 가상환경 (venv = 라이브러리 설치 폴더, 용량 크고 서버에서 다시 설치하면 됨)
+venv/
+.venv/
+
+# DB 파일 (서버에서 새로 생성됨)
+chroma_db/
+test_chroma_db/
+
+# 민감한 파일
+cookies.json
+style_profile.json

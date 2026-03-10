@@ -1,0 +1,14 @@
+[Unit]
+Description=AI 리라이팅 봇
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/telegram-bots/rewriter
+Environment=PATH=/home/ubuntu/telegram-bots/rewriter/venv/bin
+ExecStart=/home/ubuntu/telegram-bots/rewriter/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
