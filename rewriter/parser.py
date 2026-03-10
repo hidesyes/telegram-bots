@@ -26,4 +26,22 @@ def parse_file(file_bytes: bytes, filename: str) -> str:
                     pages.append(text)
         return "\n".join(pages)
 
+    elif name.endswith(".hwpx") or name.endswith(".hwp"):
+        import io
+        import zipfile
+        import xml.etree.ElementTree as ET
+        text_parts = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                for entry in sorted(zf.namelist()):
+                    if "BodyText/Section" in entry and entry.endswith(".xml"):
+                        with zf.open(entry) as f:
+                            root = ET.parse(f).getroot()
+                            for elem in root.iter():
+                                if elem.text and elem.text.strip():
+                                    text_parts.append(elem.text.strip())
+        except Exception:
+            return ""
+        return "\n".join(text_parts)
+
     return ""

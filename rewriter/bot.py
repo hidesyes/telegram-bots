@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from config import TELEGRAM_TOKEN, ALLOWED_USER_ID
-from ai import rewrite, write_from_topic
+from ai import rewrite, write_from_topic, chat, clear_chat_history
 from parser import parse_file
 
 logging.basicConfig(
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # "주제 :" 또는 "주제:" 패턴
 TOPIC_PATTERN = re.compile(r"^주제\s*[:：]\s*(.+)", re.DOTALL)
-# 글자수 추출: "1500자", "2000 자" 등
+REWRITE_KEYWORDS = re.compile(r"리라이팅|다시\s*써|고쳐\s*써|재작성|paraphrase")
 CHAR_COUNT_PATTERN = re.compile(r"(\d+)\s*자")
 
 
@@ -57,59 +57,64 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "안녕하세요! AI 리라이팅 봇입니다 ✍️\n\n"
         "📝 사용법:\n\n"
-        "1️⃣ 리라이팅 모드\n"
-        "글을 그냥 붙여넣으면 자동으로 리라이팅해드려요.\n"
-        "글자수를 지정하고 싶으면: '이 글 리라이팅해줘 2000자' 처럼 써주세요.\n"
-        "파일(txt/docx/pdf)을 전송해도 됩니다!\n\n"
-        "2️⃣ 주제 작성 모드\n"
+        "1️⃣ 자유 대화\n"
+        "평소엔 GPT처럼 자유롭게 대화하세요!\n\n"
+        "2️⃣ 리라이팅 모드\n"
+        "긴 글을 붙여넣으면 자동으로 리라이팅해드려요.\n"
+        "'이 글 리라이팅해줘 2000자' 처럼 글자수 지정도 가능해요.\n"
+        "파일(txt/docx/pdf/hwpx)을 전송해도 됩니다!\n\n"
+        "3️⃣ 주제 작성 모드\n"
         "주제 : 경제에서 작용하는 심리학 2가지 1500자\n"
-        "(위처럼 '주제 :' 또는 '주제:' 로 시작하면 최신 정보 검색 후 작성해드려요)"
+        "('주제 :' 로 시작하면 최신 정보 검색 후 작성해드려요)\n\n"
+        "📌 명령어:\n"
+        "/clear — 대화 기록 초기화"
     )
 
 
 # ─────────────────────────────────────────────
 # 텍스트 메시지 처리
 # ─────────────────────────────────────────────
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_auth(update.effective_user.id):
+        return
+    clear_chat_history(update.effective_user.id)
+    await update.message.reply_text("대화 기록을 초기화했어요!")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_auth(update.effective_user.id):
         return
 
     text = update.message.text.strip()
+    user_id = update.effective_user.id
     topic_match = TOPIC_PATTERN.match(text)
 
     if topic_match:
         # 주제 작성 모드
         topic_full = topic_match.group(1).strip()
         char_count = extract_char_count(topic_full)
-
-        await update.message.reply_text(
-            "🔍 최신 정보 검색 중... 잠시만 기다려주세요!"
-        )
-
+        await update.message.reply_text("🔍 최신 정보 검색 중... 잠시만 기다려주세요!")
         result = write_from_topic(topic_full, char_count=char_count)
         await send_result(update, result, filename="essay.txt")
 
-    else:
-        # 리라이팅 모드
+    elif len(text) > 150 or REWRITE_KEYWORDS.search(text):
+        # 리라이팅 모드: 긴 글이거나 리라이팅 키워드 포함
         char_count = extract_char_count(text)
-
-        # 글자수 지시어 제거한 순수 본문 추출
-        # (예: "이 글 리라이팅해줘 2000자" → 앞부분이 본문인 경우를 처리)
-        # 짧은 명령어만 있는 경우 안내
         clean_text = re.sub(r"\d+\s*자", "", text).strip()
-        clean_text = re.sub(r"(리라이팅|다시\s*써|고쳐)\s*(줘|주세요|해줘|해주세요)", "", clean_text).strip()
+        clean_text = re.sub(r"(리라이팅|다시\s*써|고쳐\s*써|재작성)\s*(줘|주세요|해줘|해주세요)?", "", clean_text).strip()
 
         if len(clean_text) < 30:
-            await update.message.reply_text(
-                "리라이팅할 글을 붙여넣어 주세요!\n"
-                "또는 파일(txt/docx/pdf)을 전송해주세요."
-            )
+            await update.message.reply_text("리라이팅할 글을 붙여넣어 주세요!\n또는 파일(txt/docx/pdf/hwpx)을 전송해주세요.")
             return
 
         await update.message.reply_text("✍️ 리라이팅 중... 잠시만 기다려주세요!")
-
         result = rewrite(clean_text, char_count=char_count)
         await send_result(update, result, filename="rewritten.txt")
+
+    else:
+        # 일반 GPT 대화 모드
+        reply = chat(text, user_id)
+        await update.message.reply_text(reply)
 
 
 # ─────────────────────────────────────────────
@@ -123,10 +128,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = doc.file_name or ""
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
 
-    if ext not in ("txt", "docx", "pdf"):
+    if ext not in ("txt", "docx", "pdf", "hwpx", "hwp"):
         await update.message.reply_text(
             "❌ 지원하지 않는 파일 형식이에요.\n"
-            "txt, docx, pdf 파일만 업로드해주세요!"
+            "txt, docx, pdf, hwpx 파일만 업로드해주세요!"
         )
         return
 
@@ -161,6 +166,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

@@ -3,6 +3,9 @@ from config import OPENAI_API_KEY, TAVILY_API_KEY
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# 유저별 대화 기록 저장 (메모리)
+_chat_histories: dict[int, list] = {}
+
 # AI 감지 우회용 공통 지침
 _HUMAN_STYLE_RULES = """
 글쓰기 규칙 (반드시 준수):
@@ -35,6 +38,35 @@ def search_web(query: str) -> str:
         return "\n\n".join(texts)
     except Exception:
         return ""
+
+
+def chat(message: str, user_id: int) -> str:
+    """일반 GPT 대화. 유저별 대화 기록 유지."""
+    if user_id not in _chat_histories:
+        _chat_histories[user_id] = []
+
+    _chat_histories[user_id].append({"role": "user", "content": message})
+
+    # 최근 20턴만 유지
+    if len(_chat_histories[user_id]) > 40:
+        _chat_histories[user_id] = _chat_histories[user_id][-40:]
+
+    response = client.chat.completions.create(
+        model="gpt-5-mini",
+        messages=[
+            {"role": "system", "content": "당신은 친절하고 유능한 AI 어시스턴트입니다. 사용자의 질문에 자연스럽게 답해주세요."},
+            *_chat_histories[user_id]
+        ]
+    )
+
+    reply = response.choices[0].message.content
+    _chat_histories[user_id].append({"role": "assistant", "content": reply})
+    return reply
+
+
+def clear_chat_history(user_id: int):
+    """유저의 대화 기록 초기화."""
+    _chat_histories.pop(user_id, None)
 
 
 def rewrite(text: str, char_count: int = None) -> str:
