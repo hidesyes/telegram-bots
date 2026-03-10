@@ -1,5 +1,6 @@
 import io
 import re
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -9,7 +10,7 @@ from ai import (
     rewrite, rewrite_chunked, write_from_topic,
     chat, clear_chat_history,
     save_last_rewrite, get_last_rewrite,
-    self_evaluate, _FOLLOWUP_KEYWORDS
+    self_evaluate, check_plagiarism, _FOLLOWUP_KEYWORDS
 )
 from parser import parse_file
 
@@ -57,13 +58,13 @@ async def send_result(update: Update, result: str, filename: str = "result.txt")
         )
 
 
-async def send_rewrite_result(update: Update, result: str, user_id: int):
-    """리라이팅 결과 전송 + 자가 점검 + 메모리 저장"""
+async def send_rewrite_result(update: Update, result: str, user_id: int, filename: str = "rewritten.txt"):
+    """리라이팅 결과 전송 + AI 감지 자가 점검 + 메모리 저장 (후속 수정/주제 작성용)"""
     save_last_rewrite(user_id, result)
-    await send_result(update, result, filename="rewritten.txt")
+    await send_result(update, result, filename=filename)
 
     # 자가 점검 (AI 감지 위험도 평가)
-    eval_result = self_evaluate(result)
+    eval_result = await asyncio.to_thread(self_evaluate, result)
     risk = eval_result.get("risk", "알 수 없음")
     reason = eval_result.get("reason", "")
     tips = eval_result.get("tips", [])
@@ -74,6 +75,86 @@ async def send_rewrite_result(update: Update, result: str, user_id: int):
         eval_msg += "\n\n💡 개선 팁:\n" + "\n".join(f"• {t}" for t in tips)
     eval_msg += "\n\n💬 후속 수정도 가능해요! ('더 구어체로', '글자수 늘려줘' 등)"
     await update.message.reply_text(eval_msg)
+
+
+async def _send_quality_result(
+    update: Update, result: str, user_id: int,
+    eval_result: dict, plagiarism_result: dict, attempts: int
+):
+    """품질 검증 결과 전송 (AI 위험도 + 표절률 + 시도 횟수 표시)"""
+    save_last_rewrite(user_id, result)
+    await send_result(update, result, filename="rewritten.txt")
+
+    risk = eval_result.get("risk", "알 수 없음")
+    reason = eval_result.get("reason", "")
+    tips = eval_result.get("tips", [])
+    rate = plagiarism_result.get("rate", 0)
+    plagiarism_reason = plagiarism_result.get("reason", "")
+
+    passed = (risk == "낮음" and rate < 30)
+
+    risk_emoji = {"낮음": "✅", "중간": "⚠️", "높음": "🔴"}.get(risk, "❓")
+    rate_emoji = "✅" if rate < 30 else "⚠️"
+
+    eval_msg = (
+        f"{risk_emoji} AI 감지 위험도: {risk}\n{reason}\n\n"
+        f"{rate_emoji} 표절률 추정: {rate}%\n{plagiarism_reason}\n\n"
+    )
+
+    if passed:
+        eval_msg += f"✨ {attempts}회 시도 만에 기준 통과!\n\n"
+    else:
+        if tips:
+            eval_msg += "💡 개선 팁:\n" + "\n".join(f"• {t}" for t in tips) + "\n\n"
+        eval_msg += "⚠️ 3회 시도 후 최선 결과 전달. 후속 수정으로 개선 가능해요.\n\n"
+
+    eval_msg += "💬 후속 수정도 가능해요!"
+    await update.message.reply_text(eval_msg)
+
+
+async def _quality_rewrite(
+    update: Update, text: str, char_count: int | None, user_id: int, max_retries: int = 3
+):
+    """품질 기준(AI 위험도 낮음 + 표절률 30% 미만) 충족까지 자동 재시도."""
+    best = None
+    best_eval = None
+    best_plagiarism = None
+    final_attempt = 1
+
+    for attempt in range(1, max_retries + 1):
+        if attempt == 1:
+            await update.message.reply_text(f"✍️ 리라이팅 중... ({len(text)}자)")
+        else:
+            prev_risk = best_eval.get("risk", "?") if best_eval else "?"
+            prev_rate = best_plagiarism.get("rate", "?") if best_plagiarism else "?"
+            await update.message.reply_text(
+                f"🔄 {attempt}회차 재시도 중...\n"
+                f"(AI 위험도: {prev_risk} → 낮음 목표 / 표절률: {prev_rate}% → 30% 미만 목표)"
+            )
+
+        result = await asyncio.to_thread(rewrite, text, char_count)
+        eval_result = await asyncio.to_thread(self_evaluate, result)
+        plagiarism_result = await asyncio.to_thread(check_plagiarism, text, result)
+
+        risk = eval_result.get("risk", "알 수 없음")
+        rate = plagiarism_result.get("rate", 100)
+
+        # 첫 시도는 무조건 best로 저장
+        if best is None:
+            best = result
+            best_eval = eval_result
+            best_plagiarism = plagiarism_result
+
+        final_attempt = attempt
+
+        # 두 조건 모두 통과하면 best 업데이트 후 즉시 종료
+        if risk == "낮음" and rate < 30:
+            best = result
+            best_eval = eval_result
+            best_plagiarism = plagiarism_result
+            break
+
+    await _send_quality_result(update, best, user_id, best_eval, best_plagiarism, final_attempt)
 
 
 # ─────────────────────────────────────────────
@@ -151,9 +232,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         char_count = extract_char_count(topic_full)
         clean_topic = re.sub(r"\d+\s*자", "", topic_full).strip()
         await update.message.reply_text("🔍 최신 정보 검색 중... 잠시만 기다려주세요!")
-        result = write_from_topic(clean_topic, char_count=char_count)
-        save_last_rewrite(user_id, result)
-        await send_result(update, result, filename="essay.txt")
+        result = await asyncio.to_thread(write_from_topic, clean_topic, char_count=char_count)
+        await send_rewrite_result(update, result, user_id, filename="essay.txt")
 
     elif FOLLOWUP_PATTERN.search(text) and get_last_rewrite(user_id) and len(text) < 100:
         # 후속 수정 모드: 짧은 수정 지시 + 이전 결과 있을 때
@@ -164,7 +244,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"[수정 지시]\n{text}\n\n"
             f"[수정 대상 원문]\n{last}"
         )
-        result = rewrite(modification_prompt, char_count=char_count)
+        result = await asyncio.to_thread(rewrite, modification_prompt, char_count)
         await send_rewrite_result(update, result, user_id)
 
     elif len(text) > 300 or REWRITE_KEYWORDS.search(text):
@@ -182,19 +262,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if len(clean_text) >= CHUNK_THRESHOLD:
+            # 초장문: 분할 리라이팅 후 1회 품질 체크 (재시도 없음)
             await update.message.reply_text(
                 f"✍️ 초장문({len(clean_text)}자)을 분할해서 리라이팅 중...\n시간이 좀 걸릴 수 있어요!"
             )
-            result = rewrite_chunked(clean_text, char_count=char_count)
+            result = await asyncio.to_thread(rewrite_chunked, clean_text, char_count)
+            eval_result = await asyncio.to_thread(self_evaluate, result)
+            plagiarism_result = await asyncio.to_thread(check_plagiarism, clean_text, result)
+            await _send_quality_result(update, result, user_id, eval_result, plagiarism_result, 1)
         else:
-            await update.message.reply_text(f"✍️ 리라이팅 중... ({len(clean_text)}자)")
-            result = rewrite(clean_text, char_count=char_count)
-
-        await send_rewrite_result(update, result, user_id)
+            # 일반 리라이팅: 품질 기준 충족까지 최대 3회 재시도
+            await _quality_rewrite(update, clean_text, char_count, user_id)
 
     else:
         # 일반 GPT 대화 모드
-        reply = chat(text, user_id)
+        reply = await asyncio.to_thread(chat, text, user_id)
         await update.message.reply_text(reply)
 
 
@@ -233,19 +315,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if len(parsed_text) >= CHUNK_THRESHOLD:
+        # 초장문: 분할 리라이팅 후 1회 품질 체크 (재시도 없음)
         await update.message.reply_text(
             f"✅ 텍스트 추출 완료! ({len(parsed_text)}자)\n"
             "✍️ 초장문이라 분할 리라이팅 중... 잠시만요!"
         )
-        result = rewrite_chunked(parsed_text, char_count=char_count)
+        result = await asyncio.to_thread(rewrite_chunked, parsed_text, char_count)
+        eval_result = await asyncio.to_thread(self_evaluate, result)
+        plagiarism_result = await asyncio.to_thread(check_plagiarism, parsed_text, result)
+        await _send_quality_result(update, result, user_id, eval_result, plagiarism_result, 1)
     else:
-        await update.message.reply_text(
-            f"✅ 텍스트 추출 완료! ({len(parsed_text)}자)\n"
-            "✍️ 리라이팅 중... 잠시만 기다려주세요!"
-        )
-        result = rewrite(parsed_text, char_count=char_count)
-
-    await send_rewrite_result(update, result, user_id)
+        # 일반 리라이팅: 품질 기준 충족까지 최대 3회 재시도
+        await update.message.reply_text(f"✅ 텍스트 추출 완료! ({len(parsed_text)}자)")
+        await _quality_rewrite(update, parsed_text, char_count, user_id)
 
 
 # ─────────────────────────────────────────────

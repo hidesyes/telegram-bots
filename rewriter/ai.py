@@ -146,6 +146,46 @@ def self_evaluate(text: str) -> dict:
         return {"risk": "알 수 없음", "reason": "평가 중 오류 발생", "tips": []}
 
 
+def check_plagiarism(original: str, rewritten: str) -> dict:
+    """
+    원문 vs 리라이팅 결과 표절률 추정.
+    returns: {"rate": 25, "reason": "문장 구조 대부분 변경됨. 일부 핵심 표현 유사."}
+    """
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 표절 검사 전문가입니다.\n"
+                        "원문과 리라이팅 결과를 비교해 표절률을 0~100 사이 정수로 추정하세요.\n"
+                        "표절률이 낮을수록 리라이팅이 잘 된 것입니다.\n\n"
+                        "평가 기준:\n"
+                        "- 문장 구조가 그대로면 표절률 높음\n"
+                        "- 어휘·표현이 유사하면 표절률 높음\n"
+                        "- 의미는 같되 완전히 재구성되면 표절률 낮음\n\n"
+                        "반드시 아래 JSON 형식으로만 반환:\n"
+                        '{"rate": 25, "reason": "판정 이유 1~2줄"}'
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"[원문]\n{original[:2000]}\n\n"
+                        f"[리라이팅 결과]\n{rewritten[:2000]}"
+                    )
+                }
+            ],
+            max_tokens=200,
+            response_format={"type": "json_object"}
+        )
+        import json
+        return json.loads(response.choices[0].message.content)
+    except Exception:
+        return {"rate": 0, "reason": "평가 불가"}
+
+
 def rewrite_chunked(text: str, char_count: int = None) -> str:
     """
     5000자 이상 초장문을 2000자 단위로 분할 리라이팅 후 합산.
