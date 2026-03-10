@@ -87,7 +87,7 @@ def rewrite(text: str, char_count: int = None) -> str:
     )
 
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-5",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"다음 글을 리라이팅해줘:\n\n{text}"}
@@ -129,7 +129,7 @@ def write_from_topic(topic: str, char_count: int = None) -> str:
     )
 
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-5",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
