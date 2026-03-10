@@ -150,16 +150,20 @@ def extract_top_stocks(briefing_text: str, articles: list) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "아래 원문 글들과 브리핑을 분석하여 실제로 언급된 종목 중 "
-                        "가장 많이 등장하고 브리핑 맥락과 적합한 종목 3개를 추출하라.\n\n"
+                        "아래 원문 글들과 브리핑을 분석하여 투자 관점에서 주목할 종목 3개를 선정하라.\n\n"
+                        "우선순위:\n"
+                        "1. 원문에 구체적 기업명이 언급된 경우 → 그 종목을 우선 선정\n"
+                        "2. 원문에 종목명 없이 테마·섹터만 언급된 경우 → 해당 테마의 대표 종목 추천\n"
+                        "3. 두 경우 모두 혼합 가능\n\n"
                         "규칙:\n"
-                        "1. 반드시 원문에 실제로 등장한 구체적 종목명(기업명)만 선정. 섹터·업종명 금지.\n"
-                        "2. reason은 원문에서 해당 종목이 언급된 구체적 이유를 그대로 인용하듯 작성.\n"
-                        "3. ticker는 한국 종목은 6자리 숫자, 미국 종목은 영문 티커. 모르면 빈 문자열.\n\n"
+                        "- 섹터·업종명 자체(예: '반도체 섹터', 'ETF')는 종목명으로 사용 금지. 반드시 구체적 기업명.\n"
+                        "- reason은 원문 내용 또는 추천 근거를 1~2줄로 작성.\n"
+                        "- ticker: 한국 종목은 6자리 숫자, 미국 종목은 영문 티커. 모르면 빈 문자열.\n"
+                        "- mentions: 원문에 직접 언급됐으면 횟수, 추천 종목이면 0.\n\n"
                         "반드시 아래 JSON 형식으로만 반환:\n"
                         '{"stocks": ['
                         '{"name": "정확한 기업명", "ticker": "티커", '
-                        '"reason": "원문 기반 구체적 언급 이유", "mentions": 언급횟수}'
+                        '"reason": "선정 이유", "mentions": 언급횟수}'
                         "]}"
                     )
                 },
@@ -174,7 +178,9 @@ def extract_top_stocks(briefing_text: str, articles: list) -> str:
             max_tokens=400,
             response_format={"type": "json_object"}
         )
-        data = json.loads(response.choices[0].message.content)
+        raw = response.choices[0].message.content
+        logger.info(f"[종목추출] GPT 응답: {raw[:300]}")
+        data = json.loads(raw)
         stocks = data.get("stocks", [])[:3]
         if not stocks:
             return "📌 주목 종목 Top 3\n\n이번 브리핑 글에서 특정 종목이 언급되지 않았어요.\n더 많은 글이 쌓이면 종목 추천이 더 정확해져요!"
