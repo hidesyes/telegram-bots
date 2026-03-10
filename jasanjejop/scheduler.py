@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from db import delete_old_articles, delete_articles_before, add_article, get_all_articles
 from scraper import get_channel_article_urls, scrape_article
@@ -54,11 +54,10 @@ async def _notify(text: str):
 
 
 async def run_cleanup():
+    # 6개월 이상 오래된 글 삭제 (rolling window)
     deleted_old = delete_old_articles()
-    deleted_cutoff = delete_articles_before("2025-11-01")
-    total = deleted_old + deleted_cutoff
-    if total > 0:
-        logger.info(f"[자동 삭제] {total}개 글 삭제됨")
+    if deleted_old > 0:
+        logger.info(f"[자동 삭제] {deleted_old}개 오래된 글 삭제됨")
 
 
 async def run_auto_collect():
@@ -99,7 +98,7 @@ async def run_auto_collect():
             except ValueError:
                 pass
 
-            analyze_and_update_style(article["content"])
+            await asyncio.to_thread(analyze_and_update_style, article["content"])
             result = add_article(article)
             if result not in ("skipped", "too_old"):
                 new_count += 1

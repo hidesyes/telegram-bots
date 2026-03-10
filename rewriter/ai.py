@@ -6,6 +6,17 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # 유저별 대화 기록 저장 (메모리)
 _chat_histories: dict[int, list] = {}
 
+# 유저별 마지막 리라이팅 결과 저장 (후속 수정 지원)
+_last_rewrites: dict[int, str] = {}
+
+# 후속 수정 요청 키워드
+_FOLLOWUP_KEYWORDS = (
+    r"더\s*(구어체|자연스럽게|수정|짧게|길게|쉽게|딱딱하게|풀어서|다듬어|고쳐)"
+    r"|글자\s*수\s*(늘려|줄여)"
+    r"|다시\s*(해줘|써줘|바꿔줘)"
+    r"|좀\s*더\s*(자연스럽게|구어체|짧게|길게)"
+)
+
 # AI 감지 우회용 공통 지침 — Burstiness + Perplexity 극대화 전략
 _HUMAN_STYLE_RULES = """
 [인간 필자 스타일 구현 지침]
@@ -91,6 +102,80 @@ def chat(message: str, user_id: int) -> str:
 def clear_chat_history(user_id: int):
     """유저의 대화 기록 초기화."""
     _chat_histories.pop(user_id, None)
+    _last_rewrites.pop(user_id, None)
+
+
+def save_last_rewrite(user_id: int, result: str):
+    """마지막 리라이팅 결과 저장"""
+    _last_rewrites[user_id] = result
+
+
+def get_last_rewrite(user_id: int) -> str | None:
+    """마지막 리라이팅 결과 반환"""
+    return _last_rewrites.get(user_id)
+
+
+def self_evaluate(text: str) -> dict:
+    """
+    리라이팅된 글의 AI 감지 위험도를 자체 평가.
+    returns: {"risk": "낮음/중간/높음", "reason": str, "tips": list}
+    """
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 GPTZero, Turnitin 같은 AI 감지 도구의 전문가입니다.\n"
+                        "제공된 글이 AI가 쓴 글로 탐지될 가능성을 평가하세요.\n\n"
+                        "반드시 아래 JSON 형식으로만 반환:\n"
+                        '{"risk": "낮음 또는 중간 또는 높음", '
+                        '"reason": "판정 이유 1~2줄", '
+                        '"tips": ["개선 팁 1", "개선 팁 2"]}'
+                    )
+                },
+                {"role": "user", "content": f"다음 글을 평가해줘:\n\n{text[:2000]}"}
+            ],
+            max_tokens=300,
+            response_format={"type": "json_object"}
+        )
+        import json
+        return json.loads(response.choices[0].message.content)
+    except Exception:
+        return {"risk": "알 수 없음", "reason": "평가 중 오류 발생", "tips": []}
+
+
+def rewrite_chunked(text: str, char_count: int = None) -> str:
+    """
+    5000자 이상 초장문을 2000자 단위로 분할 리라이팅 후 합산.
+    각 청크를 독립적으로 리라이팅하되 전체 맥락 일관성 유지.
+    """
+    CHUNK_SIZE = 2000
+    # 문단 단위로 분할 (단어 중간 자르기 방지)
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current_chunk = ""
+
+    for para in paragraphs:
+        if len(current_chunk) + len(para) > CHUNK_SIZE and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = para
+        else:
+            current_chunk += ("\n\n" if current_chunk else "") + para
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    results = []
+    for i, chunk in enumerate(chunks):
+        chunk_instruction = f"[전체 {len(chunks)}개 단락 중 {i+1}번째 단락입니다. 앞뒤 단락과 자연스럽게 이어지도록 작성하세요.]"
+        # 마지막 청크에만 글자수 목표 적용
+        target = char_count if (char_count and i == len(chunks) - 1) else None
+        result = rewrite(chunk_instruction + "\n\n" + chunk, char_count=target)
+        results.append(result)
+
+    return "\n\n".join(results)
 
 
 def rewrite(text: str, char_count: int = None) -> str:

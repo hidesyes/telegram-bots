@@ -5,10 +5,11 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+from datetime import datetime, timedelta
 from config import TELEGRAM_TOKEN, ALLOWED_USER_ID
 from scraper import scrape_article, do_browser_login
 from db import add_article, search_articles, get_all_articles, get_count, delete_old_articles, delete_articles_before
-from ai import analyze_and_update_style, ask_as_jasanjejop, clear_history
+from ai import analyze_and_update_style, ask_as_jasanjejop, clear_history, rewrite_query_for_search, generate_digest
 from scheduler import setup_scheduler
 
 logging.basicConfig(
@@ -38,7 +39,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💬 질문 입력 → 자산제곱 스타일 투자 분석\n"
         "🌐 실시간 뉴스 + 저장된 글 종합 답변\n\n"
         "📌 명령어:\n"
-        "/login — 네이버 로그인\n"
+        "/search [키워드] — 저장된 글 검색\n"
+        "/digest — 오늘의 자산제곱 브리핑\n"
         "/list — 저장된 글 목록\n"
         "/status — 현재 상태\n"
         "/clear — 대화 기록 초기화\n"
@@ -108,6 +110,67 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💾 저장된 글: {count}개\n\n"
         f"📅 6개월 지난 글은 매일 새벽 3시에 자동 삭제됩니다."
     )
+
+
+# ─────────────────────────────────────────────
+# /search
+# ─────────────────────────────────────────────
+async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_auth(update.effective_user.id):
+        return
+
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text("검색어를 입력해주세요.\n예시: /search 금리")
+        return
+
+    if get_count() == 0:
+        await update.message.reply_text("저장된 글이 없어요.")
+        return
+
+    results = search_articles(query, n_results=5)
+    if not results:
+        await update.message.reply_text(f"'{query}'에 관련된 글을 찾지 못했어요.")
+        return
+
+    msg = f"🔍 '{query}' 검색 결과 ({len(results)}개):\n\n"
+    for i, article in enumerate(results, 1):
+        title = article["metadata"].get("title", "제목 없음")[:40]
+        date = article["metadata"].get("written_date", "")[:10]
+        sim = article.get("similarity", 0)
+        preview = article["content"].replace("\n", " ")[:120] + "..."
+        msg += f"{i}. {title}\n   📅 {date}  관련도: {int(sim * 100)}%\n   {preview}\n\n"
+
+    await update.message.reply_text(msg)
+
+
+# ─────────────────────────────────────────────
+# /digest
+# ─────────────────────────────────────────────
+async def digest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_auth(update.effective_user.id):
+        return
+
+    if get_count() == 0:
+        await update.message.reply_text("저장된 글이 없어요.")
+        return
+
+    await update.message.reply_text("📰 브리핑 생성 중...")
+
+    # 최근 7일 글만
+    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    all_articles = get_all_articles()
+    recent = [a for a in all_articles if a["metadata"].get("written_date", "") >= cutoff]
+
+    if not recent:
+        # 최근 7일 글이 없으면 최신 5개로 대체
+        recent = all_articles[:5]
+        if not recent:
+            await update.message.reply_text("브리핑할 글이 없어요.")
+            return
+
+    result = generate_digest(recent[:5])
+    await update.message.reply_text(result)
 
 
 # ─────────────────────────────────────────────
@@ -204,7 +267,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 일반 텍스트 → 자산제곱 스타일 답변 (실시간 검색 + 대화 맥락)
         await update.message.reply_text("💭 분석 중입니다. 잠시만 기다려주세요...")
 
-        related = search_articles(text, n_results=3) if get_count() > 0 else []
+        if get_count() > 0:
+            # 쿼리 리라이팅: 짧은 질문은 검색 최적화 쿼리로 변환
+            search_query = rewrite_query_for_search(text) if len(text) < 50 else text
+            related = search_articles(search_query, n_results=3)
+        else:
+            related = []
         answer = ask_as_jasanjejop(text, related, user_id=user_id)
 
         await update.message.reply_text(answer)
@@ -218,6 +286,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("login", login))
+    app.add_handler(CommandHandler("search", search_cmd))
+    app.add_handler(CommandHandler("digest", digest_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("clear", clear_cmd))

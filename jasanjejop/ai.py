@@ -106,6 +106,60 @@ def analyze_and_update_style(article_content: str):
         return existing  # 파싱 실패 시 기존 프로필 유지
 
 
+def rewrite_query_for_search(question: str) -> str:
+    """사용자 질문을 ChromaDB 검색에 최적화된 쿼리로 변환"""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "사용자 질문을 투자 문서 검색에 최적화된 핵심 키워드 문장으로 변환하라. "
+                        "30자 이내로. 설명 없이 변환된 쿼리만 반환."
+                    )
+                },
+                {"role": "user", "content": question}
+            ],
+            max_tokens=50
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return question  # 실패 시 원본 쿼리 사용
+
+
+def generate_digest(articles: list) -> str:
+    """최근 수집된 글들을 자산제곱 스타일로 브리핑 생성"""
+    profile = load_style_profile()
+    profile_text = json.dumps(profile, ensure_ascii=False, indent=2) if profile else ""
+
+    articles_text = ""
+    for a in articles:
+        title = a["metadata"].get("title", "")
+        date = a["metadata"].get("written_date", "")[:10]
+        articles_text += f"[{date}] {title}\n"
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"당신은 자산제곱님의 분신입니다.\n{profile_text}\n\n"
+                        "최근 수집된 글 목록을 바탕으로 오늘의 투자 브리핑을 자산제곱 스타일로 작성하세요. "
+                        "300~500자로. 결론을 먼저 제시하고 근거를 설명하는 구조로. 한국어로."
+                    )
+                },
+                {"role": "user", "content": f"최근 글 목록:\n{articles_text}"}
+            ],
+            max_tokens=600
+        )
+        return "📰 오늘의 자산제곱 브리핑\n\n" + response.choices[0].message.content
+    except Exception as e:
+        return f"브리핑 생성 중 오류가 발생했어요. ({type(e).__name__})"
+
+
 def ask_as_jasanjejop(question: str, related_articles: list, user_id: int = 0) -> str:
     """자산제곱 스타일로 답변 생성 (대화 맥락 + 실시간 검색 포함)"""
     profile = load_style_profile()
@@ -115,19 +169,36 @@ def ask_as_jasanjejop(question: str, related_articles: list, user_id: int = 0) -
 
     profile_text = json.dumps(profile, ensure_ascii=False, indent=2)
 
-    # 저장된 글 컨텍스트 (날짜 포함)
+    # 저장된 글 컨텍스트 (날짜 + 유사도 포함)
     context_parts = []
     for article in related_articles:
         title = article["metadata"].get("title", "")
         content = article["content"][:1200]
         written_date_str = article["metadata"].get("written_date", "")
+        similarity = article.get("similarity", None)
         try:
-            from datetime import datetime as _dt
-            written_date = _dt.fromisoformat(written_date_str)
+            written_date = datetime.fromisoformat(written_date_str)
             date_label = f"{written_date.month}월 {written_date.day}일"
+            # 3개월 이상 오래된 글은 표시
+            age_days = (datetime.now() - written_date).days
+            age_note = " ⚠️3개월+ 오래된 글" if age_days > 90 else ""
         except (ValueError, AttributeError):
             date_label = written_date_str[:10] if written_date_str else "날짜 미상"
-        context_parts.append(f"[{date_label}자 글: {title}]\n{content}")
+            age_note = ""
+        # 유사도 레이블
+        if similarity is not None:
+            if similarity > 0.75:
+                sim_label = "매우 관련 높음"
+            elif similarity > 0.50:
+                sim_label = "관련 있음"
+            elif similarity > 0.30:
+                sim_label = "약하게 관련"
+            else:
+                sim_label = "참고용"
+            header = f"[{date_label}자 글{age_note}: {title}] (관련도: {sim_label}, {int(similarity*100)}%)"
+        else:
+            header = f"[{date_label}자 글{age_note}: {title}]"
+        context_parts.append(f"{header}\n{content}")
     stored_context = "\n\n---\n\n".join(context_parts) if context_parts else "관련 글 없음"
 
     # 실시간 웹 검색 — 동적 연도 사용

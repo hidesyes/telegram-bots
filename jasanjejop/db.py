@@ -172,14 +172,15 @@ def add_article(article: dict) -> str:
 
 
 def search_articles(query: str, n_results: int = 3) -> list:
-    """질문과 관련된 글 검색"""
+    """질문과 관련된 글 검색 (유사도 점수 포함)"""
     total = collection.count()
     if total == 0:
         return []
 
     results = collection.query(
         query_texts=[query],
-        n_results=min(n_results, total)
+        n_results=min(n_results, total),
+        include=["documents", "metadatas", "distances"]
     )
 
     if not results["documents"][0]:
@@ -187,9 +188,14 @@ def search_articles(query: str, n_results: int = 3) -> list:
 
     articles = []
     for i, doc in enumerate(results["documents"][0]):
+        distance = results["distances"][0][i]
+        # 유사도: 거리가 낮을수록 관련도 높음 (0~2 범위를 0~1로 변환)
+        similarity = round(max(0.0, 1.0 - distance / 2.0), 2)
         articles.append({
             "content": doc,
-            "metadata": results["metadatas"][0][i]
+            "metadata": results["metadatas"][0][i],
+            "distance": distance,
+            "similarity": similarity
         })
     return articles
 
