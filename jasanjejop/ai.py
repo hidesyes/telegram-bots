@@ -130,6 +130,14 @@ def rewrite_query_for_search(question: str) -> str:
 
 def extract_top_stocks(briefing_text: str, articles: list) -> str:
     """브리핑 + 원문 본문에서 실제 언급된 종목 Top 3 추출"""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 디버그: 본문이 실제로 있는지 확인
+    for i, a in enumerate(articles):
+        content = a.get('content', '')
+        logger.info(f"[종목추출] 글{i+1} 제목: {a['metadata'].get('title','')[:30]}, 본문길이: {len(content)}")
+
     # 제목 + 본문 내용 모두 전달 (최대 800자/글)
     articles_text = "\n\n---\n\n".join(
         f"[{a['metadata'].get('written_date','')[:10]}] {a['metadata'].get('title','')}\n{a.get('content','')[:800]}"
@@ -169,7 +177,7 @@ def extract_top_stocks(briefing_text: str, articles: list) -> str:
         data = json.loads(response.choices[0].message.content)
         stocks = data.get("stocks", [])[:3]
         if not stocks:
-            return ""
+            return "📌 주목 종목 Top 3\n\n이번 브리핑 글에서 특정 종목이 언급되지 않았어요.\n더 많은 글이 쌓이면 종목 추천이 더 정확해져요!"
 
         lines = ["📌 주목 종목 Top 3\n"]
         medals = ["🥇", "🥈", "🥉"]
