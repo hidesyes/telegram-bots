@@ -1,0 +1,22 @@
+name: 서버 자동 배포
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 서버에 접속해서 코드 업데이트 및 봇 재시작
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: joe5177a
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ~/telegram-bots
+            git pull
+            sudo systemctl restart jasanjejop-bot
+            sudo systemctl restart rewriter-bot
+            echo "✅ 배포 완료!"
