@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 # "주제 :" 또는 "주제:" 패턴
 TOPIC_PATTERN = re.compile(r"^주제\s*[:：]\s*(.+)", re.DOTALL)
-REWRITE_KEYWORDS = re.compile(r"리라이팅|다시\s*써|고쳐\s*써|재작성|paraphrase")
+REWRITE_KEYWORDS = re.compile(
+    r"리라이팅|다시\s*써|고쳐\s*써|재작성|paraphrase|수정해\s*줘|바꿔\s*줘|다듬어\s*줘|첨삭|"
+    r"표현\s*바꿔|사람이\s*쓴\s*것처럼|AI\s*안\s*잡히게|감지\s*우회|투린틴|turnitin|gpt\s*zero"
+)
 CHAR_COUNT_PATTERN = re.compile(r"(\d+)\s*자")
 
 
@@ -93,15 +96,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 주제 작성 모드
         topic_full = topic_match.group(1).strip()
         char_count = extract_char_count(topic_full)
+        # 글자수 패턴을 주제에서 제거하고 AI에 전달
+        clean_topic = re.sub(r"\d+\s*자", "", topic_full).strip()
         await update.message.reply_text("🔍 최신 정보 검색 중... 잠시만 기다려주세요!")
-        result = write_from_topic(topic_full, char_count=char_count)
+        result = write_from_topic(clean_topic, char_count=char_count)
         await send_result(update, result, filename="essay.txt")
 
-    elif len(text) > 150 or REWRITE_KEYWORDS.search(text):
-        # 리라이팅 모드: 긴 글이거나 리라이팅 키워드 포함
+    elif len(text) > 300 or REWRITE_KEYWORDS.search(text):
+        # 리라이팅 모드: 300자 이상의 긴 글이거나 리라이팅 키워드 포함
         char_count = extract_char_count(text)
         clean_text = re.sub(r"\d+\s*자", "", text).strip()
-        clean_text = re.sub(r"(리라이팅|다시\s*써|고쳐\s*써|재작성)\s*(줘|주세요|해줘|해주세요)?", "", clean_text).strip()
+        clean_text = re.sub(
+            r"(리라이팅|다시\s*써|고쳐\s*써|재작성|수정해\s*줘|바꿔\s*줘|다듬어\s*줘|첨삭|표현\s*바꿔|사람이\s*쓴\s*것처럼|AI\s*안\s*잡히게)\s*(줘|주세요|해줘|해주세요)?",
+            "", clean_text
+        ).strip()
 
         if len(clean_text) < 30:
             await update.message.reply_text("리라이팅할 글을 붙여넣어 주세요!\n또는 파일(txt/docx/pdf/hwpx)을 전송해주세요.")

@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -53,16 +54,14 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🌐 브라우저가 열립니다.\n"
-        "네이버에 로그인 후 잠시 기다려주세요.\n"
-        "로그인이 완료되면 자동으로 쿠키가 저장됩니다!"
+        "⚠️ 서버에서는 브라우저 로그인이 불가능해요.\n\n"
+        "로컬 PC에서 직접 실행하거나, 쿠키 파일(cookies.json)을\n"
+        "서버에 직접 업로드해주세요.\n\n"
+        "📋 로컬 로그인 방법:\n"
+        "1. 로컬에서 `python scraper_login.py` 실행\n"
+        "2. 생성된 cookies.json을 서버 ~/telegram-bots/jasanjejop/에 업로드\n"
+        "3. `sudo systemctl restart jasanjejop-bot`"
     )
-
-    try:
-        await do_browser_login()
-        await update.message.reply_text("✅ 로그인 완료! 이제 링크를 보내면 글을 저장할 수 있어요.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ 로그인 실패: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -178,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📄 글 수집 완료!\n제목: {article['title']}\n\n💭 스타일 분석 중..."
         )
 
-        analyze_and_update_style(article["content"])
+        await asyncio.to_thread(analyze_and_update_style, article["content"])
         result = add_article(article)
 
         if result == "too_old":

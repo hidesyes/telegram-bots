@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from openai import OpenAI
 from config import OPENAI_API_KEY, STYLE_PROFILE_PATH, TAVILY_API_KEY
 
@@ -67,7 +68,7 @@ def analyze_and_update_style(article_content: str):
     existing_text = json.dumps(existing, ensure_ascii=False) if existing else "없음"
 
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-4o-mini",
         messages=[
             {
                 "role": "system",
@@ -96,9 +97,13 @@ def analyze_and_update_style(article_content: str):
         response_format={"type": "json_object"}
     )
 
-    updated = json.loads(response.choices[0].message.content)
-    save_style_profile(updated)
-    return updated
+    try:
+        updated = json.loads(response.choices[0].message.content)
+        if updated:  # 빈 객체로 덮어씌우지 않도록 검증
+            save_style_profile(updated)
+        return updated
+    except (json.JSONDecodeError, Exception):
+        return existing  # 파싱 실패 시 기존 프로필 유지
 
 
 def ask_as_jasanjejop(question: str, related_articles: list, user_id: int = 0) -> str:
@@ -125,23 +130,34 @@ def ask_as_jasanjejop(question: str, related_articles: list, user_id: int = 0) -
         context_parts.append(f"[{date_label}자 글: {title}]\n{content}")
     stored_context = "\n\n---\n\n".join(context_parts) if context_parts else "관련 글 없음"
 
-    # 실시간 웹 검색
-    web_context = search_web(f"투자 {question} 시장 분석 2024 2025")
+    # 실시간 웹 검색 — 동적 연도 사용
+    current_year = datetime.now().year
+    web_context = search_web(f"{question} 시장 분석 {current_year}")
     if web_context:
         web_section = f"\n\n[실시간 검색 정보]\n{web_context}"
     else:
         web_section = ""
 
     system_prompt = (
-        "당신은 투자자 '자산제곱'입니다.\n"
-        "아래는 자산제곱님의 글쓰기 스타일과 투자 철학 분석입니다:\n\n"
+        "당신은 투자 전문가 '자산제곱'의 분신입니다. 자산제곱님의 글과 철학을 완벽히 내면화하여, "
+        "마치 자산제곱님이 직접 답하는 것처럼 응답합니다.\n\n"
+        "## 자산제곱님의 스타일 프로필\n"
         f"{profile_text}\n\n"
-        "답변 규칙:\n"
-        "1. 질문 유형에 맞게 자유롭게 답하라. 형식을 강요하지 말 것.\n"
-        "2. 저장된 글에서 관련 내용을 찾았으면, 반드시 'N월 N일자 글에서...'로 날짜를 밝히고 실제 내용을 인용하라.\n"
-        "3. 저장된 글 내용과 GPT 자체 지식 / 실시간 검색 결과를 명확히 구분하라.\n"
-        "4. 저장된 글과 무관한 일반 질문은 GPT처럼 자연스럽게 답하라.\n"
-        "5. 스타일 프로필이 있으면 자산제곱님의 말투로, 없으면 그냥 자연스럽게 답하라."
+        "## 답변 사고 프로세스 (반드시 이 순서로 생각하라)\n"
+        "1. [질문 분류] 이 질문이 투자/시장 관련인지, 저장된 글과 직접 관련 있는지 판단\n"
+        "2. [저장 글 탐색] 관련 저장 글이 있으면 날짜를 확인하고 최신성 평가\n"
+        "3. [정보 통합] 저장 글(1차) → 실시간 검색(2차) → GPT 지식(3차) 우선순위로 정보 통합\n"
+        "4. [스타일 적용] 자산제곱님의 말투, 핵심 원칙, 자주 쓰는 표현을 자연스럽게 녹여냄\n"
+        "5. [출처 명시] 어떤 정보를 어디서 가져왔는지 독자가 알 수 있게 표기\n\n"
+        "## 답변 규칙\n"
+        "1. **출처 투명성**: 저장된 글 내용은 'N월 N일자 글에서...' 형식으로 날짜와 함께 인용. "
+        "실시간 검색 결과는 '[최신 정보]'로 표기. GPT 지식은 '제 판단으로는...'으로 구분.\n"
+        "2. **정보 신선도**: 저장 글이 3개월 이상 오래됐다면 '당시 분석이지만 현재는 다를 수 있다'고 언급 후 실시간 검색으로 보완.\n"
+        "3. **스타일 일관성**: recurring_phrases를 자연스럽게 활용. 결론을 먼저 제시하고 근거를 설명하는 구조 선호.\n"
+        "4. **비투자 질문**: 투자/시장과 무관한 질문은 '투자 분야 외의 질문이지만...' 서두로 자연스럽게 답변.\n"
+        "5. **불확실성 인정**: 모르거나 데이터가 없는 경우 추측하지 말고 솔직하게 한계를 인정.\n"
+        "6. **저장 글 없을 때**: 관련 저장 글이 없다면 '아직 이 주제에 대한 자산제곱님의 글이 없어서, 제 분석을 드릴게요.'라고 먼저 밝힘.\n"
+        "7. **항상 한국어로 답변.**"
     )
 
     # 대화 히스토리 가져오기
@@ -158,13 +174,15 @@ def ask_as_jasanjejop(question: str, related_articles: list, user_id: int = 0) -
         )
     })
 
-    response = client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=messages,
-        max_tokens=1500
-    )
-
-    answer = response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=1500
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        return f"죄송해요, 일시적인 오류가 발생했어요. 잠시 후 다시 시도해주세요. (오류: {type(e).__name__})"
 
     # 히스토리 업데이트
     add_to_history(user_id, "user", question)

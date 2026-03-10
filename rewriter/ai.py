@@ -6,17 +6,39 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # 유저별 대화 기록 저장 (메모리)
 _chat_histories: dict[int, list] = {}
 
-# AI 감지 우회용 공통 지침
+# AI 감지 우회용 공통 지침 — Burstiness + Perplexity 극대화 전략
 _HUMAN_STYLE_RULES = """
-글쓰기 규칙 (반드시 준수):
-1. 문장 길이를 불규칙하게 섞어라. 아주 짧은 문장과 긴 문장을 번갈아 써라.
-2. "사실", "솔직히", "그런데", "막상", "근데", "뭐랄까", "어찌 보면" 같은 구어체 표현을 자연스럽게 섞어라.
-3. 서론-본론-결론의 완벽한 3단 구성을 피해라. 자유롭게 전개하라.
-4. 필자의 개인적인 의견이나 감정을 군데군데 담아라. (예: "개인적으로 이 부분이 흥미로웠다", "솔직히 처음엔 잘 몰랐는데")
-5. 같은 단어나 표현을 반복하지 말고, 동의어나 다른 표현으로 바꿔라.
-6. AI가 자주 쓰는 "첫째", "둘째", "따라서", "결론적으로" 같은 형식적 표현을 피해라.
-7. 문단 길이도 불규칙하게 써라. 한 줄짜리 문단도 괜찮다.
-8. 필요하면 비유나 개인 경험담을 창작해서 넣어라.
+[인간 필자 스타일 구현 지침]
+
+## 핵심 목표: Perplexity(어휘 예측 불가성) + Burstiness(문장 길이 변동성) 극대화
+AI 탐지 알고리즘은 두 지표로 작동한다:
+- Perplexity 낮음 = 다음 단어가 예측 가능 = AI 판정
+- Burstiness 낮음 = 문장 길이가 균일 = AI 판정
+
+## 문장 리듬 (Burstiness 극대화)
+- 3~5단어 파편 문장과 40단어 이상 복문을 의도적으로 번갈아 쓸 것
+- 같은 길이의 문장이 3개 이상 연속되면 안 됨
+- 예시: "맞다. 그런데 그 '맞다'는 말이 얼마나 위험한지, 우리는 당연하게 받아들이는 것들 속에서 실제로 얼마나 많은 전제를 아무 검증 없이 믿고 있는지를 생각해보면, 이건 단순한 동의가 아니다."
+
+## 어휘 예측 불가성 (Perplexity 극대화)
+- 같은 개념을 같은 문단에서 3가지 이상 다른 방식으로 표현
+- 종결어미 다양화: "~이다" 일색 금지. "~더라", "~셈이지", "~지 않을까", "~기도 했다", "~는 건 아닐까"
+- 접속어: "그러므로/따라서/결론적으로" 금지 → "그러고 보면", "어찌 됐든", "뭐, 어쨌든", "결국엔" 사용
+
+## 인간적 불완전성 삽입
+- 작은 자기 모순이나 망설임: "처음엔 확신했는데... 지금은 좀 다르게 생각한다"
+- 주제에서 약간 벗어나는 여담 1~2개 삽입 (전체 맥락은 유지)
+- 개인 경험 창작 시 구체적 세부 정보 포함: 장소, 날짜, 대화 상대 이름, 구체적 상황
+
+## 절대 사용 금지 표현
+- 나열형: "첫째/둘째/셋째", "①②③", "다음과 같다", "살펴보겠다", "알아보겠다"
+- 마무리형: "결론적으로", "이상으로", "위에서 살펴본 바와 같이", "정리하자면"
+- AI 과용 표현: "중요한 것은", "주목할 만한", "흥미롭게도", "특히 주목해야 할", "다양한 측면에서"
+
+## 출력 형식 규칙
+- 결과물 텍스트만 출력. "네, 리라이팅했습니다" 같은 머리말 절대 금지
+- 마크다운 헤더(##), 볼드(**), 리스트(-) 사용 금지 — 일반 텍스트 형식으로만
+- 단락 사이는 빈 줄 하나로 구분
 """
 
 
@@ -51,17 +73,19 @@ def chat(message: str, user_id: int) -> str:
     if len(_chat_histories[user_id]) > 40:
         _chat_histories[user_id] = _chat_histories[user_id][-40:]
 
-    response = client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=[
-            {"role": "system", "content": "당신은 친절하고 유능한 AI 어시스턴트입니다. 사용자의 질문에 자연스럽게 답해주세요."},
-            *_chat_histories[user_id]
-        ]
-    )
-
-    reply = response.choices[0].message.content
-    _chat_histories[user_id].append({"role": "assistant", "content": reply})
-    return reply
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "당신은 친절하고 유능한 AI 어시스턴트입니다. 사용자의 질문에 자연스럽게 답해주세요."},
+                *_chat_histories[user_id]
+            ]
+        )
+        reply = response.choices[0].message.content
+        _chat_histories[user_id].append({"role": "assistant", "content": reply})
+        return reply
+    except Exception as e:
+        return f"죄송해요, 일시적인 오류가 발생했어요. 잠시 후 다시 시도해주세요. (오류: {type(e).__name__})"
 
 
 def clear_chat_history(user_id: int):
@@ -76,26 +100,34 @@ def rewrite(text: str, char_count: int = None) -> str:
     """
     length_instruction = ""
     if char_count:
-        length_instruction = f"\n목표 글자수: {char_count}자 (±10% 허용). 반드시 해당 분량을 채워라."
+        length_instruction = f"\n목표 글자수: {char_count}자 (±10% 허용). 억지로 채우지 말고 내용 깊이로 자연스럽게 맞출 것."
 
     system_prompt = (
-        "당신은 대학생 과제 전문 글쓰기 도우미입니다.\n"
-        "아래 텍스트를 GPTZero, Turnitin 등 AI 감지 도구가 '사람이 쓴 글'로 인식하도록 완전히 리라이팅하세요.\n"
-        "원문의 핵심 내용과 주장은 유지하되, 표현 방식을 완전히 바꿔야 합니다.\n\n"
+        "당신은 대학 교수 출신 글쓰기 코치입니다. 학생이 쓴 초안을 받아 "
+        "내용은 100% 보존하되 표현 방식을 완전히 재구성합니다.\n\n"
+        "필수 조건:\n"
+        "1. 원문의 모든 주장, 근거, 사실, 수치, 사례는 변경 없이 보존\n"
+        "2. 원문에 없는 새로운 주장이나 사실 추가 금지\n"
+        "3. 표현, 문장 구조, 어휘, 문단 순서는 자유롭게 재구성\n\n"
         f"{_HUMAN_STYLE_RULES}"
         f"{length_instruction}"
     )
 
-    response = client.chat.completions.create(
-        model="gpt-5",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"다음 글을 리라이팅해줘:\n\n{text}"}
-        ],
-        max_tokens=4000
-    )
+    # max_tokens를 char_count 기반으로 동적 계산 (한국어 1자 ≈ 1.5토큰)
+    max_tok = max(4000, int(char_count * 2)) if char_count else 4000
 
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"다음 글을 리라이팅해줘:\n\n{text}"}
+            ],
+            max_tokens=min(max_tok, 16000)
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"리라이팅 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. (오류: {type(e).__name__})"
 
 
 def write_from_topic(topic: str, char_count: int = None) -> str:
@@ -105,6 +137,7 @@ def write_from_topic(topic: str, char_count: int = None) -> str:
     """
     # Tavily로 최신 정보 검색
     web_context = search_web(topic)
+    sources = []
     if web_context:
         web_section = f"\n\n[참고할 최신 정보]\n{web_context}\n\n"
     else:
@@ -112,12 +145,14 @@ def write_from_topic(topic: str, char_count: int = None) -> str:
 
     length_instruction = ""
     if char_count:
-        length_instruction = f"\n목표 글자수: {char_count}자 (±10% 허용). 반드시 해당 분량을 채워라."
+        length_instruction = f"\n목표 글자수: {char_count}자 (±10% 허용). 억지로 채우지 말고 내용 깊이로 자연스럽게 맞출 것."
 
     system_prompt = (
-        "당신은 대학생 과제 전문 글쓰기 도우미입니다.\n"
-        "주어진 주제로 GPTZero, Turnitin 등 AI 감지 도구가 '사람이 쓴 글'로 인식하는 글을 처음부터 작성하세요.\n"
-        "최신 정보(검색 결과)와 창작한 개인 경험을 바탕으로 작성하세요.\n\n"
+        "당신은 다양한 분야의 칼럼을 써온 프리랜서 작가입니다.\n\n"
+        "글쓰기 방침:\n"
+        "1. 검색 결과의 사실·통계는 활용하되 문장은 완전히 재구성\n"
+        "2. 개인 경험은 구체적으로 창작 (장소, 시간, 대화 상대 포함)\n"
+        "3. 학술 보고서가 아닌 읽기 좋은 에세이 형식이 기본값\n\n"
         f"{_HUMAN_STYLE_RULES}"
         f"{length_instruction}"
     )
@@ -128,13 +163,17 @@ def write_from_topic(topic: str, char_count: int = None) -> str:
         "위 주제로 글을 작성해줘. 개인적인 경험이나 생각도 자연스럽게 섞어서."
     )
 
-    response = client.chat.completions.create(
-        model="gpt-5",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        max_tokens=4000
-    )
+    max_tok = max(4000, int(char_count * 2)) if char_count else 4000
 
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=min(max_tok, 16000)
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"글 작성 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. (오류: {type(e).__name__})"
