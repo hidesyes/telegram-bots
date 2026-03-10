@@ -129,37 +129,41 @@ def rewrite_query_for_search(question: str) -> str:
 
 
 def extract_top_stocks(briefing_text: str, articles: list) -> str:
-    """브리핑 내용에서 자주 언급되고 맥락상 적합한 종목 Top 3 추출"""
-    # 원문 글 내용도 함께 전달해서 언급 빈도 + 맥락 분석
-    articles_text = "\n\n".join(
-        f"[{a['metadata'].get('written_date','')[:10]}] {a['metadata'].get('title','')}"
+    """브리핑 + 원문 본문에서 실제 언급된 종목 Top 3 추출"""
+    # 제목 + 본문 내용 모두 전달 (최대 800자/글)
+    articles_text = "\n\n---\n\n".join(
+        f"[{a['metadata'].get('written_date','')[:10]}] {a['metadata'].get('title','')}\n{a.get('content','')[:800]}"
         for a in articles
     )
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "투자 브리핑과 원문 글 목록을 분석하여 "
-                        "여러 번 언급되고 현재 브리핑 맥락과 가장 적합한 종목 3가지를 추출하라.\n\n"
+                        "아래 원문 글들과 브리핑을 분석하여 실제로 언급된 종목 중 "
+                        "가장 많이 등장하고 브리핑 맥락과 적합한 종목 3개를 추출하라.\n\n"
+                        "규칙:\n"
+                        "1. 반드시 원문에 실제로 등장한 구체적 종목명(기업명)만 선정. 섹터·업종명 금지.\n"
+                        "2. reason은 원문에서 해당 종목이 언급된 구체적 이유를 그대로 인용하듯 작성.\n"
+                        "3. ticker는 한국 종목은 6자리 숫자, 미국 종목은 영문 티커. 모르면 빈 문자열.\n\n"
                         "반드시 아래 JSON 형식으로만 반환:\n"
                         '{"stocks": ['
-                        '{"name": "종목명", "ticker": "티커(없으면 빈 문자열)", '
-                        '"reason": "선정 이유 1줄", "mentions": 언급횟수(숫자)}'
+                        '{"name": "정확한 기업명", "ticker": "티커", '
+                        '"reason": "원문 기반 구체적 언급 이유", "mentions": 언급횟수}'
                         "]}"
                     )
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"[브리핑 내용]\n{briefing_text}\n\n"
-                        f"[원문 글 목록]\n{articles_text}"
+                        f"[브리핑]\n{briefing_text}\n\n"
+                        f"[원문 글 본문]\n{articles_text}"
                     )
                 }
             ],
-            max_tokens=300,
+            max_tokens=400,
             response_format={"type": "json_object"}
         )
         data = json.loads(response.choices[0].message.content)
