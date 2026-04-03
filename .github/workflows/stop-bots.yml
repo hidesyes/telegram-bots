@@ -1,0 +1,21 @@
+name: 봇 정지
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 서버에 접속해서 봇 정지
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: joe5177a
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            sudo systemctl stop jasanjejop-bot
+            sudo systemctl stop rewriter-bot
+            sudo systemctl disable jasanjejop-bot
+            sudo systemctl disable rewriter-bot
+            echo "🛑 리라이팅봇 + 자산제곱봇 정지 완료!"
